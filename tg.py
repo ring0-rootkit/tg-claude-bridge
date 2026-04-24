@@ -333,7 +333,7 @@ def call_claude_streaming(chat_id, message, conversation_id=None,
     env = os.environ.copy()
     env["IS_SANDBOX"] = "1"
     cmd = ["claude", "-p", "--verbose", "--dangerously-skip-permissions",
-           "--output-format", "stream-json"]
+           "--output-format", "stream-json", "--effort", "medium"]
     if conversation_id:
         cmd.extend(["--resume", conversation_id])
     cmd.append(message)
