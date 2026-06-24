@@ -485,16 +485,19 @@ def _format_tool_line(name, inp):
 
 
 def _format_usage(u: dict, title: str) -> str:
+    """Render a usage block as a markdown table (rich_message friendly)."""
     total_in = u["input_tokens"] + u["cache_read_tokens"] + u["cache_creation_tokens"]
     return (
-        f"*{title}*\n"
-        f"Runs: {u['runs']}\n"
-        f"Est. cost: ${u['cost_usd']:.4f}\n"
-        f"Input tokens: {total_in:,}\n"
-        f"  • fresh: {u['input_tokens']:,}\n"
-        f"  • cache read: {u['cache_read_tokens']:,}\n"
-        f"  • cache write: {u['cache_creation_tokens']:,}\n"
-        f"Output tokens: {u['output_tokens']:,}"
+        f"## {title}\n\n"
+        f"| Metric          |            Value |\n"
+        f"|:----------------|-----------------:|\n"
+        f"| Runs            | {u['runs']:>16,} |\n"
+        f"| Est. cost (USD) | {'$' + format(u['cost_usd'], '.4f'):>16} |\n"
+        f"| Input tokens    | {total_in:>16,} |\n"
+        f"| • fresh         | {u['input_tokens']:>16,} |\n"
+        f"| • cache read    | {u['cache_read_tokens']:>16,} |\n"
+        f"| • cache write   | {u['cache_creation_tokens']:>16,} |\n"
+        f"| Output tokens   | {u['output_tokens']:>16,} |"
     )
 
 
@@ -518,19 +521,18 @@ def _fmt_reset(iso: str) -> str:
         return iso
 
 
-def _fmt_window(label: str, w: dict | None) -> str | None:
+def _window_row(label: str, w: dict | None) -> str | None:
+    """Render one window as a markdown table row, or None if window is empty."""
     if not w or w.get("utilization") is None:
         return None
     used = w["utilization"]
     left = max(0.0, 100.0 - used)
-    line = f"{label}: *{left:.0f}%* left ({used:.0f}% used)"
-    if w.get("resets_at"):
-        line += f", resets {_fmt_reset(w['resets_at'])}"
-    return line
+    resets = _fmt_reset(w["resets_at"]) if w.get("resets_at") else "—"
+    return f"| {label:<9} | {left:>3.0f}% | {used:>3.0f}% | {resets:<9} |"
 
 
 def fetch_remaining_quota() -> tuple[str | None, str | None]:
-    """Best-effort fetch of subscription limit windows. Returns (text, error)."""
+    """Best-effort fetch of subscription limit windows. Returns (markdown_table, error)."""
     try:
         with open(CREDENTIALS_FILE) as f:
             token = json.load(f)["claudeAiOauth"]["accessToken"]
@@ -558,11 +560,13 @@ def fetch_remaining_quota() -> tuple[str | None, str | None]:
         ("7d Opus", "seven_day_opus"),
         ("7d Sonnet", "seven_day_sonnet"),
     )
-    lines = [ln for label, key in windows
-             if (ln := _fmt_window(label, data.get(key)))]
-    if not lines:
+    rows = [r for label, key in windows
+            if (r := _window_row(label, data.get(key)))]
+    if not rows:
         return None, "no window data in response"
-    return "\n".join(lines), None
+    header = ("| Window    | Left | Used | Resets    |\n"
+              "|:----------|-----:|-----:|:----------|")
+    return header + "\n" + "\n".join(rows), None
 
 
 # ---------------------------------------------------------------------------
@@ -980,14 +984,15 @@ class ChatWorker:
             if combined.strip() == "/usage":
                 quota, qerr = fetch_remaining_quota()
                 if quota:
-                    parts = ["\U0001f6e0 *Remaining (subscription limits)*\n" + quota]
+                    parts = ["# 📊 Usage", "## 🛠 Remaining subscription quota\n\n" + quota]
                 else:
-                    parts = [f"\U0001f6e0 *Remaining:* unavailable — {qerr}"]
+                    parts = ["# 📊 Usage",
+                             f"## 🛠 Remaining subscription quota\n\n_unavailable — {qerr}_"]
                 g = get_global_usage()
-                parts.append(_format_usage(g, "\U0001f4ca Spent — all chats (cumulative)"))
+                parts.append(_format_usage(g, "📈 Spent — all chats (cumulative)"))
                 mine = get_usage(self.chat_id)
                 if mine:
-                    parts.append(_format_usage(mine, "\U0001f464 Spent — this chat"))
+                    parts.append(_format_usage(mine, "👤 Spent — this chat"))
                 send_message(self.chat_id, "\n\n".join(parts))
                 continue
 
