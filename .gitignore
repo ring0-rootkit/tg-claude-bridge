@@ -9,6 +9,11 @@
 .xdraft_sessions.json
 .restart.log
 
+# Spanish bot: secrets, runtime DB/logs, generated audio & image caches
+spanish_bot/.env
+spanish_bot/data/
+spanish_bot/cache/
+
 # Caches / IDE
 __pycache__/
 .venv/

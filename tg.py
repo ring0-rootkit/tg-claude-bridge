@@ -302,12 +302,52 @@ def extract_file_from_message(msg: dict) -> tuple[str | None, str | None]:
     if vnote:
         return vnote["file_id"], None
 
+    # Animation (GIF / silent mp4) — common in forwards
+    animation = msg.get("animation")
+    if animation:
+        return animation["file_id"], animation.get("file_name")
+
     # Sticker
     sticker = msg.get("sticker")
     if sticker:
         return sticker["file_id"], None
 
     return None, None
+
+
+def forward_info(msg: dict) -> str | None:
+    """Return a short human-readable origin string if msg is forwarded, else None.
+
+    Handles both the modern `forward_origin` object (Bot API 7.0+) and the
+    legacy `forward_from* / forward_date` fields."""
+    origin = msg.get("forward_origin")
+    if origin:
+        otype = origin.get("type")
+        if otype == "user":
+            u = origin.get("sender_user", {})
+            name = " ".join(p for p in (u.get("first_name"),
+                                        u.get("last_name")) if p) or "user"
+            return f"forwarded from {name}"
+        if otype == "hidden_user":
+            return f"forwarded from {origin.get('sender_user_name', 'hidden user')}"
+        if otype in ("channel", "chat"):
+            chat = origin.get("chat") or origin.get("sender_chat") or {}
+            return f"forwarded from {chat.get('title', otype)}"
+        return "forwarded message"
+
+    # Legacy fields
+    if msg.get("forward_from"):
+        u = msg["forward_from"]
+        name = " ".join(p for p in (u.get("first_name"),
+                                    u.get("last_name")) if p) or "user"
+        return f"forwarded from {name}"
+    if msg.get("forward_sender_name"):
+        return f"forwarded from {msg['forward_sender_name']}"
+    if msg.get("forward_from_chat"):
+        return f"forwarded from {msg['forward_from_chat'].get('title', 'chat')}"
+    if msg.get("forward_date"):
+        return "forwarded message"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1401,6 +1441,10 @@ def poll_loop():
             # Check for file attachments
             file_id, file_name = extract_file_from_message(msg)
 
+            # Forwarded messages carry the original author's text, which won't
+            # start with the mention tag — detect them so we can bypass the gate.
+            fwd = forward_info(msg)
+
             if not chat_id or (not text and not file_id):
                 continue
 
@@ -1428,6 +1472,12 @@ def poll_loop():
                     text = (f"[File upload failed to download]\n{text}"
                             if text else "[File upload failed to download]")
 
+            # Prefix forwarded content with its origin so the context block and
+            # the agent both know where it came from.
+            if fwd:
+                note = f"[{fwd}]"
+                text = f"{note}\n{text}" if text else note
+
             # Compute key early so we can record the message into the rolling
             # history buffer even when the mention-tag gate ends up ignoring it.
             thread_id_for_history = msg.get("message_thread_id")
@@ -1440,12 +1490,16 @@ def poll_loop():
             # (case-insensitive). The tag is stripped before processing and
             # the prior chat history is prepended as context for the agent.
             history_prefix = ""
-            if MENTION_TAG:
+            if MENTION_TAG and not fwd:
                 stripped = text.lstrip()
                 if not stripped.lower().startswith(MENTION_TAG.lower()):
                     log(f"  [update {uid}] missing mention tag, ignored")
                     continue
                 text = stripped[len(MENTION_TAG):].lstrip()
+                history_prefix = format_history_block(hist_key, exclude_last=True)
+            elif MENTION_TAG and fwd:
+                # Forwarded messages are an explicit hand-off — bypass the gate
+                # but still include surrounding chat history as context.
                 history_prefix = format_history_block(hist_key, exclude_last=True)
 
             # Ignore messages from the "General" topic (no thread ID)
